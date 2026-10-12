@@ -47,32 +47,6 @@ public class DisabledPersonPO {
 
     private String education;
 
-    // ==================== 残疾人证信息（当前证件，不保存换证历史） ====================
-
-    /**
-     * 残疾人证号。
-     *
-     * <p>注意：与身份证号 {@link #idCard} 是两个不同概念，不可混用。
-     */
-    private String certNo;
-
-    /** 发证日期 */
-    private LocalDate certIssueDate;
-
-    /** 有效期至 */
-    private LocalDate certExpireDate;
-
-    /** 发证机关 */
-    private String certIssueOrg;
-
-    /**
-     * 证件状态：正常 / 换证中 / 注销 / 挂失。
-     *
-     * <p>注意：这是"证件"的状态，与档案自身的启用/停用状态 {@link #status} 无关。
-     * 历史档案未录入证件时该字段为 null。
-     */
-    private String certStatus;
-
     /** 状态：0-停用，1-正常 */
     private Integer status;
 

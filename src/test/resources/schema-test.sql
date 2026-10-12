@@ -60,18 +60,31 @@ CREATE TABLE IF NOT EXISTS disabled_person (
     disability_type   VARCHAR(20),
     disability_level  VARCHAR(20),
     education         VARCHAR(20),
-    -- 残疾人证信息（当前证件，全部可空：历史档案未录入时保持 NULL）
-    cert_no           VARCHAR(32),
-    cert_issue_date   DATE,
-    cert_expire_date  DATE,
-    cert_issue_org    VARCHAR(100),
-    cert_status       VARCHAR(10),
     status            TINYINT DEFAULT 1,
     deleted           TINYINT DEFAULT 0,
     create_time       DATETIME DEFAULT CURRENT_TIMESTAMP,
     update_time       DATETIME DEFAULT CURRENT_TIMESTAMP,
     create_by         BIGINT,
     update_by         BIGINT
+);
+
+-- 独立残疾人证件表，字段对应 DisabledCertPO；不影响生产数据库。
+CREATE TABLE IF NOT EXISTS disabled_cert (
+    id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+    person_id         BIGINT NOT NULL,
+    cert_no           VARCHAR(50),
+    cert_type         VARCHAR(20),
+    issue_date        DATE,
+    expire_date       DATE,
+    issue_org         VARCHAR(100),
+    disability_type   VARCHAR(20),
+    disability_level  VARCHAR(20),
+    cert_status       VARCHAR(20) DEFAULT '0',
+    is_current        TINYINT DEFAULT 0,
+    remark            VARCHAR(255),
+    deleted           TINYINT DEFAULT 0,
+    create_time       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    update_time       DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 预置业务角色（与生产一致，GRID_WORKER 保留但不参与鉴权）

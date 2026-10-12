@@ -46,23 +46,6 @@ public class DisabledPersonVO {
 
     private String education;
 
-    // ==================== 残疾人证信息（当前证件） ====================
-
-    /** 残疾人证号（与身份证号 idCard 不同） */
-    private String certNo;
-
-    /** 发证日期 */
-    private LocalDate certIssueDate;
-
-    /** 有效期至 */
-    private LocalDate certExpireDate;
-
-    /** 发证机关 */
-    private String certIssueOrg;
-
-    /** 证件状态：正常 / 换证中 / 注销 / 挂失，与档案状态 status 无关 */
-    private String certStatus;
-
     /** 状态：0-停用，1-正常 */
     private Integer status;
 

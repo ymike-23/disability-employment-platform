@@ -20,7 +20,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.time.LocalDate;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -79,9 +78,6 @@ public class DisabledPersonServiceImpl implements DisabledPersonService {
             wrapper.eq(DisabledPersonPO::getGridId, query.getGridId());
         }
 
-        // 证件筛选条件：叠加在数据权限条件之上，不会放宽权限
-        applyCertFilters(wrapper, query);
-
         Page<DisabledPersonPO> result = disabledPersonMapper.selectPage(page, wrapper);
         Map<Long, String> gridNameMap = loadGridNames(result.getRecords());
 
@@ -124,9 +120,6 @@ public class DisabledPersonServiceImpl implements DisabledPersonService {
     public Long create(DisabledPersonSaveDTO dto) {
         // 身份证号查重（排除软删除记录；数据库无唯一索引，存在并发风险）
         checkIdCardDuplicate(dto.getIdCard(), null);
-        // 证件信息校验与残疾人证号查重
-        validateCertInfo(dto);
-        checkCertNoDuplicate(dto.getCertNo(), null);
 
         Long gridId;
         if (gridScopeService.isAdmin()) {
@@ -145,7 +138,6 @@ public class DisabledPersonServiceImpl implements DisabledPersonService {
         po.setGridId(gridId);
         // status 使用数据库默认值语义，由后端统一置为 1
         po.setStatus(1);
-        normalizeCertFields(po);
         po.setCreateBy(SecurityUtils.getUserId());
 
         disabledPersonMapper.insert(po);
@@ -156,9 +148,6 @@ public class DisabledPersonServiceImpl implements DisabledPersonService {
     public void update(Long id, DisabledPersonSaveDTO dto) {
         // 身份证号查重（排除当前记录）
         checkIdCardDuplicate(dto.getIdCard(), id);
-        // 证件信息校验与残疾人证号查重（排除当前记录自身）
-        validateCertInfo(dto);
-        checkCertNoDuplicate(dto.getCertNo(), id);
 
         LambdaUpdateWrapper<DisabledPersonPO> wrapper = new LambdaUpdateWrapper<>();
         wrapper.eq(DisabledPersonPO::getId, id);
@@ -174,7 +163,6 @@ public class DisabledPersonServiceImpl implements DisabledPersonService {
         po.setGridId(null);
         po.setStatus(null);
         po.setDeleted(null);
-        normalizeCertFields(po);
         po.setUpdateBy(SecurityUtils.getUserId());
 
         int rows = disabledPersonMapper.update(po, wrapper);
@@ -219,121 +207,6 @@ public class DisabledPersonServiceImpl implements DisabledPersonService {
         if (disabledPersonMapper.selectCount(wrapper) > 0) {
             throw new BusinessException("身份证号已存在");
         }
-    }
-
-    /**
-     * 残疾人证号查重。
-     *
-     * <p>规则与身份证号保持一致：查重排除已逻辑删除的档案，即已删除档案的证号允许复用。
-     * 因此数据库侧不建唯一索引（唯一索引会禁止复用，与此处业务规则冲突）。
-     *
-     * <p>同样存在"先查后写"的并发风险（TOCTOU）；若要禁止复用，
-     * 需改为数据库唯一索引并调整此处查重逻辑（不排除软删除）。
-     */
-    private void checkCertNoDuplicate(String certNo, Long excludeId) {
-        if (!StringUtils.hasText(certNo)) {
-            return;
-        }
-        LambdaQueryWrapper<DisabledPersonPO> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(DisabledPersonPO::getCertNo, certNo.trim());
-        if (excludeId != null) {
-            wrapper.ne(DisabledPersonPO::getId, excludeId);
-        }
-        // deleted 由 @TableLogic 自动过滤（排除软删除）
-        if (disabledPersonMapper.selectCount(wrapper) > 0) {
-            throw new BusinessException("残疾人证号已存在");
-        }
-    }
-
-    /**
-     * 证件信息业务校验。
-     *
-     * <p>设计原则：证件信息对历史档案<b>非必填</b>。任一字段为空表示"未录入"，
-     * 不做强制；仅当字段填写时才校验其合法性。
-     */
-    private void validateCertInfo(DisabledPersonSaveDTO dto) {
-        // 证件状态：仅允许约定的四个值
-        if (StringUtils.hasText(dto.getCertStatus())) {
-            String status = dto.getCertStatus().trim();
-            if (!VALID_CERT_STATUSES.contains(status)) {
-                throw new BusinessException(400, "证件状态不合法，可选值："
-                        + String.join("、", CERT_STATUS_NORMAL, CERT_STATUS_RENEWING,
-                        CERT_STATUS_CANCELLED, CERT_STATUS_LOST));
-            }
-        }
-        // 日期先后关系：两个日期都填写时才比较，只填一个不报错
-        LocalDate issueDate = dto.getCertIssueDate();
-        LocalDate expireDate = dto.getCertExpireDate();
-        if (issueDate != null && expireDate != null && !expireDate.isAfter(issueDate)) {
-            throw new BusinessException(400, "有效期至必须晚于发证日期");
-        }
-    }
-
-    /**
-     * 证件筛选条件（分页查询）。
-     */
-    private void applyCertFilters(LambdaQueryWrapper<DisabledPersonPO> wrapper, DisabledPersonQueryDTO query) {
-        if (StringUtils.hasText(query.getCertNo())) {
-            wrapper.eq(DisabledPersonPO::getCertNo, query.getCertNo().trim());
-        }
-        if (StringUtils.hasText(query.getCertStatus())) {
-            String status = query.getCertStatus().trim();
-            if (!VALID_CERT_STATUSES.contains(status)) {
-                throw new BusinessException(400, "证件状态不合法，可选值："
-                        + String.join("、", CERT_STATUS_NORMAL, CERT_STATUS_RENEWING,
-                        CERT_STATUS_CANCELLED, CERT_STATUS_LOST));
-            }
-            wrapper.eq(DisabledPersonPO::getCertStatus, status);
-        }
-        if (Boolean.TRUE.equals(query.getExpiringSoon())) {
-            applyExpiringSoon(wrapper, query.getExpireWithinDays());
-        }
-    }
-
-    /**
-     * "即将到期"筛选。
-     *
-     * <p>定义：有效期至落在 [今天, 今天 + 预警天数] <b>闭区间</b>内（当天到期即算到期）。
-     * <ul>
-     *   <li>有效期为空：不参与预警（历史档案未录入证件时不会被筛选出来）</li>
-     *   <li>已注销、已挂失：不参与预警；证件状态为空视为"未录入状态"，不排除</li>
-     *   <li>预警天数：默认 30 天，范围 1~365（由 DTO 校验），非法/空值回落默认 30</li>
-     * </ul>
-     */
-    private void applyExpiringSoon(LambdaQueryWrapper<DisabledPersonPO> wrapper, Integer expireWithinDays) {
-        int days = DEFAULT_EXPIRE_WITHIN_DAYS;
-        if (expireWithinDays != null && expireWithinDays >= 1 && expireWithinDays <= 365) {
-            days = expireWithinDays;
-        }
-
-        LocalDate today = LocalDate.now();
-        LocalDate deadline = today.plusDays(days);
-
-        wrapper.isNotNull(DisabledPersonPO::getCertExpireDate);
-        wrapper.ge(DisabledPersonPO::getCertExpireDate, today);
-        wrapper.le(DisabledPersonPO::getCertExpireDate, deadline);
-        // 状态为空（未录入）不排除，仅排除已注销、已挂失
-        wrapper.and(w -> w.isNull(DisabledPersonPO::getCertStatus)
-                .or()
-                .notIn(DisabledPersonPO::getCertStatus, EXPIRY_EXCLUDED_CERT_STATUSES));
-    }
-
-    /**
-     * 规范化证件文本字段：去除首尾空白，空串按未录入处理（存 null）。
-     *
-     * <p>保证"查重用的值"与"入库的值"一致（均为 trim 后）。
-     */
-    private void normalizeCertFields(DisabledPersonPO po) {
-        po.setCertNo(normalizeText(po.getCertNo()));
-        po.setCertStatus(normalizeText(po.getCertStatus()));
-        po.setCertIssueOrg(normalizeText(po.getCertIssueOrg()));
-    }
-
-    private String normalizeText(String value) {
-        if (!StringUtils.hasText(value)) {
-            return null;
-        }
-        return value.trim();
     }
 
     /**
