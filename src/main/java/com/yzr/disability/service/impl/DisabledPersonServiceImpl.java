@@ -66,7 +66,7 @@ public class DisabledPersonServiceImpl implements DisabledPersonService {
             List<Long> gridIds = gridScopeService.getCurrentGridIds();
             if (gridIds.size() > 1) {
                 // 配置异常：拒绝访问，绝不扩大权限
-                throw new BusinessException(GridScopeService.MULTI_GRID_MESSAGE);
+                throw new BusinessException(403, GridScopeService.MULTI_GRID_MESSAGE);
             }
             if (gridIds.isEmpty()) {
                 // 无网格：返回空分页（不降级为全量）

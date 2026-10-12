@@ -176,7 +176,7 @@ class DisabledPersonPermissionTest {
         assertEquals(0, data.get("records").size(), "记录应为空");
 
         // 详情、写操作应被拒绝
-        assertEquals(500, codeOf(get("/api/disabled-person/" + p1Id, noGridToken)));
+        assertEquals(403, codeOf(get("/api/disabled-person/" + p1Id, noGridToken)));
     }
 
     @Test
@@ -184,7 +184,7 @@ class DisabledPersonPermissionTest {
     void businessWithMultipleGridsRejected() throws Exception {
         String resp = get("/api/disabled-person/page?current=1&size=50", multiToken);
 
-        assertEquals(500, codeOf(resp), "多网格应拒绝访问");
+        assertEquals(403, codeOf(resp), "多网格应拒绝访问");
         assertEquals(GridScopeService.MULTI_GRID_MESSAGE, messageOf(resp), "应返回统一提示");
         assertFalse(resp.contains("grid"), "不应泄露网格内部信息");
     }

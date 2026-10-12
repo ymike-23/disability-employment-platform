@@ -91,6 +91,21 @@ CREATE INDEX IF NOT EXISTS idx_person_id ON disabled_cert (person_id);
 CREATE INDEX IF NOT EXISTS idx_cert_no ON disabled_cert (cert_no);
 CREATE INDEX IF NOT EXISTS idx_person_current ON disabled_cert (person_id, is_current);
 
+-- 培训需求测试表，仅作用于 H2；按现有 MySQL 结构映射，不迁移生产数据库。
+CREATE TABLE IF NOT EXISTS training_demand (
+    id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+    person_id         BIGINT NOT NULL,
+    demand_type       VARCHAR(20),
+    demand_desc       VARCHAR(500),
+    status            VARCHAR(20) DEFAULT '0',
+    remark            VARCHAR(255),
+    deleted           TINYINT DEFAULT 0,
+    create_time       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    update_time       DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    create_by         BIGINT,
+    update_by         BIGINT
+);
+
 -- 预置业务角色（与生产一致，GRID_WORKER 保留但不参与鉴权）
 -- 使用条件插入保证幂等：多个测试上下文共享同一 H2 内存库时不会重复写入
 INSERT INTO sys_role (role_name, role_code, description, status, deleted)

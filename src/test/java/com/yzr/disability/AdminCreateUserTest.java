@@ -162,6 +162,29 @@ class AdminCreateUserTest {
     }
 
     @Test
+    @DisplayName("🔒 BUSINESS 角色配置失效 → 403")
+    void disabledBusinessRoleReturns403() throws Exception {
+        SysRolePO role = sysRoleMapper.selectById(roleIdOf("BUSINESS"));
+        Integer originalStatus = role.getStatus();
+        try {
+            role.setStatus(0);
+            assertEquals(1, sysRoleMapper.updateById(role));
+
+            String body = "{\"username\":\"uc_role_disabled\",\"password\":\"Biz@123456\"}";
+            String resp = post("/api/admin/addusers", body, adminToken);
+            assertEquals(403, codeOf(resp), "角色配置失效应返回 403");
+            assertEquals("业务人员角色未配置或已停用，请联系管理员处理", messageOf(resp));
+
+            LambdaQueryWrapper<SysUserPO> wrapper = new LambdaQueryWrapper<>();
+            wrapper.eq(SysUserPO::getUsername, "uc_role_disabled");
+            assertEquals(0L, sysUserMapper.selectCount(wrapper).longValue(), "不应创建无有效角色的账号");
+        } finally {
+            role.setStatus(originalStatus);
+            sysRoleMapper.updateById(role);
+        }
+    }
+
+    @Test
     @DisplayName("🔒 参数异常：用户名为空 / 密码过短 → 400")
     void invalidParamReturns400() throws Exception {
         // 用户名为空

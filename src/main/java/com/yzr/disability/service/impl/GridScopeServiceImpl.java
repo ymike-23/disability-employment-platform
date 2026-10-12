@@ -48,14 +48,14 @@ public class GridScopeServiceImpl implements GridScopeService {
     public Long requireSingleGridId() {
         List<Long> gridIds = getCurrentGridIds();
         if (isAdmin()) {
-            throw new BusinessException("管理员请显式指定网格");
+            throw new BusinessException(403, "管理员请显式指定网格");
         }
         if (gridIds.isEmpty()) {
-            throw new BusinessException(NO_GRID_MESSAGE);
+            throw new BusinessException(403, NO_GRID_MESSAGE);
         }
         if (gridIds.size() > 1) {
             // 配置异常：拒绝访问，绝不扩大权限范围
-            throw new BusinessException(MULTI_GRID_MESSAGE);
+            throw new BusinessException(403, MULTI_GRID_MESSAGE);
         }
         return gridIds.get(0);
     }

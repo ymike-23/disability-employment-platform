@@ -55,7 +55,7 @@ public class UserServiceImpl implements UserService {
                 .eq(SysRolePO::getStatus, 1);
         SysRolePO role = sysRoleMapper.selectOne(roleWrapper);
         if (role == null) {
-            throw new BusinessException("业务人员角色未配置或已停用，请联系管理员处理");
+            throw new BusinessException(403, "业务人员角色未配置或已停用，请联系管理员处理");
         }
 
         // 3. 创建账号（BCrypt 加密，不存明文）
