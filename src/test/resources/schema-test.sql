@@ -80,12 +80,16 @@ CREATE TABLE IF NOT EXISTS disabled_cert (
     disability_type   VARCHAR(20),
     disability_level  VARCHAR(20),
     cert_status       VARCHAR(20) DEFAULT '0',
-    is_current        TINYINT DEFAULT 0,
+    is_current        TINYINT(1) NOT NULL DEFAULT 1,
     remark            VARCHAR(255),
     deleted           TINYINT DEFAULT 0,
     create_time       DATETIME DEFAULT CURRENT_TIMESTAMP,
-    update_time       DATETIME DEFAULT CURRENT_TIMESTAMP
+    update_time       DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_person_id ON disabled_cert (person_id);
+CREATE INDEX IF NOT EXISTS idx_cert_no ON disabled_cert (cert_no);
+CREATE INDEX IF NOT EXISTS idx_person_current ON disabled_cert (person_id, is_current);
 
 -- 预置业务角色（与生产一致，GRID_WORKER 保留但不参与鉴权）
 -- 使用条件插入保证幂等：多个测试上下文共享同一 H2 内存库时不会重复写入
