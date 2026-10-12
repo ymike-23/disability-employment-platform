@@ -1,0 +1,3 @@
+-- 在 sys_user 表中插入测试用户（密码通过 BCryptPasswordEncoder 在 Java 侧生成）
+-- 此文件仅作为占位，测试用例会通过代码插入测试用户
+-- 确保 sys_user 表存在且包含字段：id, username, password, real_name, status, create_time, update_time

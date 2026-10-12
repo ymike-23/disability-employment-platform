@@ -1,0 +1,37 @@
+spring:
+  application:
+    name: disability
+
+  # 测试数据源：H2 内存数据库（隔离，绝不连接开发库 disability_db）
+  # MODE=MySQL 保持与生产 MySQL 语法兼容，分页插件无需改动
+  datasource:
+    url: jdbc:h2:mem:disability_test;MODE=MySQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  # 测试建表脚本（仅作用于 H2 内存库）
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema-test.sql
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.yzr.disability.entity
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+jwt:
+  secret: YTJkM2Y1ZjEwMjM0NTY3ODkwYWJjZGVmMTIzNDU2Nzg5MGFiY2RlZjEyMzQ1Njc4OTA=
+  expiration: 86400
+
+logging:
+  level:
+    com.yzr.disability.mapper: debug
