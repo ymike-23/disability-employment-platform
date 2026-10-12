@@ -106,6 +106,31 @@ CREATE TABLE IF NOT EXISTS training_demand (
     update_by         BIGINT
 );
 
+-- 培训计划测试表，仅作用于 H2；字段及状态沿用现有 MySQL 结构。
+CREATE TABLE IF NOT EXISTS training_plan (
+    id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+    plan_name         VARCHAR(100) NOT NULL,
+    category          VARCHAR(20),
+    training_type     VARCHAR(20),
+    start_date        DATE,
+    end_date          DATE,
+    location          VARCHAR(100),
+    capacity          INT DEFAULT 0,
+    enrolled_count    INT DEFAULT 0,
+    organizer         VARCHAR(100),
+    status            VARCHAR(20) DEFAULT '0',
+    remark            VARCHAR(255),
+    deleted           TINYINT DEFAULT 0,
+    create_time       DATETIME DEFAULT CURRENT_TIMESTAMP,
+    update_time       DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    create_by         BIGINT,
+    update_by         BIGINT
+);
+
+CREATE INDEX IF NOT EXISTS idx_category ON training_plan (category);
+CREATE INDEX IF NOT EXISTS idx_status ON training_plan (status);
+CREATE INDEX IF NOT EXISTS idx_training_type ON training_plan (training_type);
+
 -- 预置业务角色（与生产一致，GRID_WORKER 保留但不参与鉴权）
 -- 使用条件插入保证幂等：多个测试上下文共享同一 H2 内存库时不会重复写入
 INSERT INTO sys_role (role_name, role_code, description, status, deleted)
