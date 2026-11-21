@@ -3,6 +3,7 @@ package com.yzr.disability.entity.vo;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 系统用户返回 VO。
@@ -22,5 +23,14 @@ public class SysUserVO {
     /** 角色编码，如 BUSINESS */
     private String roleCode;
 
+    private Long gridId;
+
+    private String gridName;
+
+    /** 保留真实绑定列表，历史多网格配置不能被静默覆盖。 */
+    private List<GridOptionVO> grids = List.of();
+
     private LocalDateTime createTime;
+
+    private LocalDateTime updateTime;
 }

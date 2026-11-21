@@ -7,7 +7,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
- * 残疾人档案返回 VO。
+ * 人员档案模块：残疾人档案返回 VO。
  *
  * <p>不包含 deleted 等内部字段。
  */
@@ -48,6 +48,9 @@ public class DisabledPersonVO {
 
     /** 状态：0-停用，1-正常 */
     private Integer status;
+
+    /** 就业状态字典值；NULL表示尚未核实。 */
+    private String employmentStatus;
 
     private LocalDateTime createTime;
 }

@@ -11,7 +11,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
- * disabled_person 表持久化对象。
+ * 人员档案模块：disabled_person 表持久化对象。
  */
 @Data
 @TableName("disabled_person")
@@ -49,6 +49,9 @@ public class DisabledPersonPO {
 
     /** 状态：0-停用，1-正常 */
     private Integer status;
+
+    /** 就业状态字典值；NULL表示尚未核实，由就业服务维护。 */
+    private String employmentStatus;
 
     /** 逻辑删除：0-未删除，1-已删除 */
     @TableLogic

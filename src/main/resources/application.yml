@@ -29,3 +29,10 @@ jwt:
 logging:
   level:
     com.yzr.disability.mapper: debug
+
+qwen:
+  api-key: ${QWEN_API_KEY:}
+  base-url: ${QWEN_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+  model: ${QWEN_MODEL:qwen-plus}
+  connect-timeout-seconds: ${QWEN_CONNECT_TIMEOUT_SECONDS:5}
+  request-timeout-seconds: ${QWEN_REQUEST_TIMEOUT_SECONDS:45}

@@ -19,9 +19,10 @@ public class TrainingPlanPO {
 
     private String planName;
 
-    /** 1-康复类，2-就业类。 */
+    /** sys_dict.training_category 的 dict_value。 */
     private String category;
 
+    /** sys_dict.training_type 的 dict_value。 */
     private String trainingType;
     private LocalDate startDate;
     private LocalDate endDate;
@@ -30,8 +31,11 @@ public class TrainingPlanPO {
     private Integer enrolledCount;
     private String organizer;
 
-    /** 0-未开始，1-进行中，2-已结束。 */
+    /** sys_dict.training_status 的 dict_value，表示培训业务进度。 */
     private String status;
+
+    /** sys_dict.training_publish_status 的 dict_value，表示是否对外公开。 */
+    private String publishStatus;
 
     private String remark;
 

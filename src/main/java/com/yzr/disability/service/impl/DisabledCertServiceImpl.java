@@ -7,9 +7,11 @@ import com.yzr.disability.entity.dto.DisabledCertQueryDTO;
 import com.yzr.disability.entity.dto.DisabledCertSaveDTO;
 import com.yzr.disability.entity.po.DisabledCertPO;
 import com.yzr.disability.entity.po.DisabledPersonPO;
+import com.yzr.disability.entity.po.SysDictPO;
 import com.yzr.disability.entity.vo.DisabledCertVO;
 import com.yzr.disability.mapper.DisabledCertMapper;
 import com.yzr.disability.mapper.DisabledPersonMapper;
+import com.yzr.disability.mapper.SysDictMapper;
 import com.yzr.disability.service.DisabledCertService;
 import com.yzr.disability.service.GridScopeService;
 import org.springframework.beans.BeanUtils;
@@ -36,12 +38,16 @@ public class DisabledCertServiceImpl implements DisabledCertService {
     @Autowired
     private GridScopeService gridScopeService;
 
+    @Autowired
+    private SysDictMapper sysDictMapper;
+
     @Override
     public List<DisabledCertVO> list(DisabledCertQueryDTO query) {
         requirePerson(query.getPersonId(), false, "档案不存在或无权访问");
         validateCurrentFlag(query.getIsCurrent());
+        validateLength(query.getCertNo(), 50, "证件编号");
+        validateLength(query.getCertStatus(), 20, "证件状态");
         String status = normalizeText(query.getCertStatus());
-        validateStatus(status);
 
         LambdaQueryWrapper<DisabledCertPO> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(DisabledCertPO::getPersonId, query.getPersonId());
@@ -80,6 +86,7 @@ public class DisabledCertServiceImpl implements DisabledCertService {
     public Long create(DisabledCertSaveDTO dto) {
         // 在同一事务内锁定有权限的人员，避免同时新增两条当前证件。
         requirePerson(dto.getPersonId(), true, "档案不存在或无权访问");
+        validateSubmittedFields(dto);
 
         DisabledCertPO po = new DisabledCertPO();
         BeanUtils.copyProperties(dto, po);
@@ -87,9 +94,9 @@ public class DisabledCertServiceImpl implements DisabledCertService {
         po.setIsCurrent(dto.getIsCurrent() == null ? 1 : dto.getIsCurrent());
         if (po.getCertStatus() == null) {
             po.setCertStatus(CERT_STATUS_NORMAL);
+            validateDictValue("cert_status", po.getCertStatus(), "证件状态");
         }
         validateCurrentFlag(po.getIsCurrent());
-        validateStatus(po.getCertStatus());
         validateDates(po.getIssueDate(), po.getExpireDate());
         checkCertNoDuplicate(po.getCertNo(), po.getPersonId());
 
@@ -113,13 +120,13 @@ public class DisabledCertServiceImpl implements DisabledCertService {
         if (!Objects.equals(existing.getPersonId(), dto.getPersonId())) {
             throw new BusinessException(400, "不允许修改证件所属人员");
         }
+        validateSubmittedFields(dto);
 
         DisabledCertPO changes = new DisabledCertPO();
         BeanUtils.copyProperties(dto, changes);
         changes.setPersonId(null);
         normalizeFields(changes);
         validateCurrentFlag(changes.getIsCurrent());
-        validateStatus(changes.getCertStatus());
         // 部分更新也必须校验最终日期，避免只修改一个日期时绕过校验。
         validateDates(changes.getIssueDate() == null ? existing.getIssueDate() : changes.getIssueDate(),
                 changes.getExpireDate() == null ? existing.getExpireDate() : changes.getExpireDate());
@@ -184,8 +191,8 @@ public class DisabledCertServiceImpl implements DisabledCertService {
         }
         // 使用数据库里的 personId 校验权限，不能信任修改入参中的 personId。
         requirePerson(cert.getPersonId(), true, "证件不存在或无权操作");
-        // 获取人员锁后重新读取，处理等待锁期间证件已被删除的情况。
-        DisabledCertPO latest = disabledCertMapper.selectById(id);
+        // 锁定当前读避免 MySQL 可重复读继续使用等待人员锁前的旧快照。
+        DisabledCertPO latest = disabledCertMapper.selectForUpdate(id, cert.getPersonId());
         if (latest == null || !Objects.equals(latest.getPersonId(), cert.getPersonId())) {
             throw new BusinessException(admin ? 404 : 403, "证件不存在或无权操作");
         }
@@ -224,9 +231,38 @@ public class DisabledCertServiceImpl implements DisabledCertService {
         }
     }
 
-    private void validateStatus(String status) {
-        if (status != null && !VALID_CERT_STATUSES.contains(status)) {
-            throw new BusinessException(400, "证件状态不合法，可选值：正常、换证中、注销、挂失");
+    private void validateSubmittedFields(DisabledCertSaveDTO dto) {
+        validateLength(dto.getCertNo(), 50, "证件编号");
+        validateLength(dto.getCertType(), 20, "证件类型");
+        validateLength(dto.getIssueOrg(), 100, "发证机关");
+        validateLength(dto.getDisabilityType(), 20, "残疾类别");
+        validateLength(dto.getDisabilityLevel(), 20, "残疾等级");
+        validateLength(dto.getCertStatus(), 20, "证件状态");
+        validateLength(dto.getRemark(), 255, "备注");
+        validateDictValue("cert_type", dto.getCertType(), "证件类型");
+        validateDictValue("disability_type", dto.getDisabilityType(), "残疾类别");
+        validateDictValue("disability_level", dto.getDisabilityLevel(), "残疾等级");
+        validateDictValue("cert_status", dto.getCertStatus(), "证件状态");
+    }
+
+    private void validateLength(String value, int maxLength, String fieldName) {
+        if (value != null && value.length() > maxLength) {
+            throw new BusinessException(400, fieldName + "长度不能超过" + maxLength);
+        }
+    }
+
+    private void validateDictValue(String dictType, String value, String fieldName) {
+        if (value == null) {
+            return;
+        }
+        LambdaQueryWrapper<SysDictPO> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(SysDictPO::getDictType, dictType)
+                .eq(SysDictPO::getDictValue, value)
+                .eq(SysDictPO::getStatus, 1)
+                .select(SysDictPO::getDictValue);
+        SysDictPO dict = sysDictMapper.selectOne(wrapper);
+        if (dict == null || !value.equals(dict.getDictValue())) {
+            throw new BusinessException(400, fieldName + "字典值不存在或已停用");
         }
     }
 

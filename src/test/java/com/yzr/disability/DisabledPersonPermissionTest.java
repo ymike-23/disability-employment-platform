@@ -54,6 +54,15 @@ class DisabledPersonPermissionTest {
 
     private static final String PWD = "Test@123456";
 
+    /**
+     * 本类播种档案的统一姓名前缀，用于测试数据隔离。
+     *
+     * <p>全量执行测试时，其他测试类会写入大量档案，档案总数会超过单页 50 条，
+     * 导致本类播种的档案落在第一页之外。分页查询按该前缀精确筛选后，
+     * 断言只依赖本类数据，既不修改业务分页规则，也不放宽数据权限实现。
+     */
+    private static final String PERSON_PREFIX = "DPPERM-";
+
     @LocalServerPort
     private int port;
 
@@ -117,10 +126,10 @@ class DisabledPersonPermissionTest {
         createGrid("测试网格E", gridWorkerUserId);
 
         // 3. 档案
-        p1Id = createPerson("档案A1", "110101199001011111", grid1Id);
-        p2Id = createPerson("档案B1", "110101199001012222", grid2Id);
-        pNoGridId = createPerson("档案无网格", "110101199001013333", null);
-        pDeletedId = createPerson("档案已删除", "110101199001014444", grid1Id);
+        p1Id = createPerson(PERSON_PREFIX + "档案A1", "110101199001011111", grid1Id);
+        p2Id = createPerson(PERSON_PREFIX + "档案B1", "110101199001012222", grid2Id);
+        pNoGridId = createPerson(PERSON_PREFIX + "档案无网格", "110101199001013333", null);
+        pDeletedId = createPerson(PERSON_PREFIX + "档案已删除", "110101199001014444", grid1Id);
         // 逻辑删除最后一条
         disabledPersonMapper.deleteById(pDeletedId);
 
@@ -148,6 +157,8 @@ class DisabledPersonPermissionTest {
         JsonNode data = pageData(adminToken);
         List<Long> ids = idsOf(data);
 
+        // 管理员不受网格限制：本类播种的 3 条未删除档案（网格A、网格B、无网格）应全部可见。
+        assertEquals(3, data.get("total").asLong(), "ADMIN 应看到全部未删除的本类档案");
         assertTrue(ids.contains(p1Id), "ADMIN 应看到网格A档案");
         assertTrue(ids.contains(p2Id), "ADMIN 应看到网格B档案");
         assertTrue(ids.contains(pNoGridId), "ADMIN 应看到无网格档案");
@@ -157,8 +168,11 @@ class DisabledPersonPermissionTest {
     @Test
     @DisplayName("✅ BUSINESS 只能查询自己网格的档案")
     void businessSeesOnlyOwnGrid() throws Exception {
-        List<Long> ids = idsOf(pageData(biz1Token));
+        JsonNode data = pageData(biz1Token);
+        List<Long> ids = idsOf(data);
 
+        // 本类播种档案中只有网格A的 1 条对 biz1 可见。
+        assertEquals(1, data.get("total").asLong(), "业务人员只应看到本网格档案");
         assertTrue(ids.contains(p1Id), "业务人员应看到本网格档案");
         assertFalse(ids.contains(p2Id), "不应看到其他网格档案");
         assertFalse(ids.contains(pNoGridId), "不应看到无网格档案");
@@ -204,7 +218,7 @@ class DisabledPersonPermissionTest {
         assertEquals(403, codeOf(resp), "越权修改应返回 403");
 
         DisabledPersonPO po = disabledPersonMapper.selectById(p2Id);
-        assertEquals("档案B1", po.getName(), "数据不应被修改");
+        assertEquals(PERSON_PREFIX + "档案B1", po.getName(), "数据不应被修改");
     }
 
     @Test
@@ -348,7 +362,9 @@ class DisabledPersonPermissionTest {
     }
 
     private JsonNode pageData(String token) throws Exception {
-        String resp = get("/api/disabled-person/page?current=1&size=50", token);
+        // 按本类专属姓名前缀筛选，使断言只覆盖本类播种的档案，不受其他测试类数据影响。
+        // 前缀为纯 ASCII，无需 URL 编码；分页参数与业务默认规则保持不变。
+        String resp = get("/api/disabled-person/page?current=1&size=50&name=" + PERSON_PREFIX, token);
         assertEquals(200, codeOf(resp), "分页查询应成功");
         return objectMapper.readTree(resp).get("data");
     }

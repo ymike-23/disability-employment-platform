@@ -7,18 +7,15 @@ import org.apache.ibatis.annotations.Select;
 
 public interface TrainingPlanMapper extends BaseMapper<TrainingPlanPO> {
 
-    /** 写事务内按真实创建人的网格权限锁定计划，容量校验读取最新报名人数。 */
+    /**
+     * 写事务内锁定计划行，容量与发布状态校验读取最新数据。
+     *
+     * <p>计划不再按创建人或网格授权，权限由方法级角色控制，因此此处只按主键加锁。
+     */
     @Select("""
-            <script>
             SELECT p.* FROM training_plan p
             WHERE p.id = #{id} AND p.deleted = 0
-            <if test="gridId != null">
-                AND EXISTS (SELECT 1 FROM sys_grid g
-                    WHERE g.id = #{gridId} AND g.grid_worker_id = p.create_by
-                    AND g.status = 1 AND g.deleted = 0)
-            </if>
             FOR UPDATE
-            </script>
             """)
-    TrainingPlanPO selectAccessibleForUpdate(@Param("id") Long id, @Param("gridId") Long gridId);
+    TrainingPlanPO selectAccessibleForUpdate(@Param("id") Long id);
 }

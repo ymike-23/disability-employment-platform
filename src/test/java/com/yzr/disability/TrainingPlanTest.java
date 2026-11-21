@@ -2,17 +2,18 @@ package com.yzr.disability;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.yzr.disability.entity.dto.LoginRequestDTO;
+import com.yzr.disability.entity.po.SysDictPO;
 import com.yzr.disability.entity.po.SysGridPO;
 import com.yzr.disability.entity.po.SysRolePO;
 import com.yzr.disability.entity.po.SysUserPO;
 import com.yzr.disability.entity.po.SysUserRolePO;
 import com.yzr.disability.entity.po.TrainingPlanPO;
+import com.yzr.disability.mapper.SysDictMapper;
 import com.yzr.disability.mapper.SysGridMapper;
 import com.yzr.disability.mapper.SysRoleMapper;
 import com.yzr.disability.mapper.SysUserMapper;
 import com.yzr.disability.mapper.SysUserRoleMapper;
 import com.yzr.disability.mapper.TrainingPlanMapper;
-import com.yzr.disability.service.GridScopeService;
 import com.yzr.disability.service.TrainingPlanService;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -43,17 +44,22 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** 培训计划接口、规则及网格权限集成测试，仅使用 H2 测试库。 */
+/**
+ * 培训计划接口、发布流程及权限集成测试，仅使用 H2 测试库。
+ *
+ * <p>计划由管理员统一维护并发布；业务人员可查看全平台已发布计划，
+ * 不能新增、修改、删除或发布计划。
+ */
 @SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class TrainingPlanTest {
 
     private static final String API = "/api/training-plan";
     private static final String PWD = "Test@123456";
-    private static final String JOB_TYPE = "就业技能";
-    private static final String REHAB_TYPE = "康复训练";
-    private static final LocalDate START = LocalDate.of(2026, 11, 1);
-    private static final LocalDate END = LocalDate.of(2026, 11, 5);
+    private static final String JOB_TYPE = "11";
+    private static final String REHAB_TYPE = "1";
+    private static final LocalDate START = LocalDate.now().plusDays(10);
+    private static final LocalDate END = START.plusDays(4);
 
     @LocalServerPort
     private int port;
@@ -62,6 +68,8 @@ class TrainingPlanTest {
     private ObjectMapper objectMapper;
     @Autowired
     private TrainingPlanMapper trainingPlanMapper;
+    @Autowired
+    private SysDictMapper sysDictMapper;
     @Autowired
     private SysUserMapper sysUserMapper;
     @Autowired
@@ -91,12 +99,11 @@ class TrainingPlanTest {
     private String workerToken;
     private int caseNumber;
     private String planPrefix;
-    private Long pendingAId;
-    private Long ongoingAId;
+    private Long draftAId;
+    private Long enrollingAId;
     private Long endedAId;
-    private Long pendingBId;
-    private Long adminPlanId;
-    private Long unownedPlanId;
+    private Long cancelledAId;
+    private Long publishedBId;
 
     @BeforeAll
     void setupUsers() throws Exception {
@@ -123,12 +130,16 @@ class TrainingPlanTest {
     void setupPlans() {
         // 独立名称范围隔离每个用例，分页和更新不依赖执行顺序。
         planPrefix = "培训计划测试" + (++caseNumber) + "-";
-        pendingAId = seedPlan("职业培训", businessUserId, "2", JOB_TYPE, "0", 8);
-        ongoingAId = seedPlan("康复训练", businessUserId, "1", REHAB_TYPE, "1", 3);
-        endedAId = seedPlan("计算机培训", businessUserId, "2", JOB_TYPE, "2", 0);
-        pendingBId = seedPlan("其他网格就业", businessBUserId, "2", JOB_TYPE, "0", 2);
-        adminPlanId = seedPlan("管理员计划", adminUserId, "1", REHAB_TYPE, "0", 0);
-        unownedPlanId = seedPlan("历史无创建人计划", null, "1", REHAB_TYPE, "0", 0);
+        draftAId = seedPlan("草稿计划", TrainingPlanService.PUBLISH_DRAFT, "2", JOB_TYPE,
+                TrainingPlanService.STATUS_NOT_STARTED, 0);
+        enrollingAId = seedPlan("报名中计划", TrainingPlanService.PUBLISH_PUBLISHED, "1", REHAB_TYPE,
+                TrainingPlanService.STATUS_ENROLLING, 3);
+        endedAId = seedPlan("已结束计划", TrainingPlanService.PUBLISH_PUBLISHED, "2", JOB_TYPE,
+                TrainingPlanService.STATUS_ENDED, 0);
+        cancelledAId = seedPlan("已取消计划", TrainingPlanService.PUBLISH_PUBLISHED, "1", REHAB_TYPE,
+                TrainingPlanService.STATUS_CANCELLED, 0);
+        publishedBId = seedPlan("其他网格计划", TrainingPlanService.PUBLISH_PUBLISHED, "2", JOB_TYPE,
+                TrainingPlanService.STATUS_NOT_STARTED, 2);
     }
 
     @AfterAll
@@ -139,8 +150,8 @@ class TrainingPlanTest {
     }
 
     @Test
-    @DisplayName("新增培训计划成功，默认报名人数为0、状态为未开始")
-    void createPlan() throws Exception {
+    @DisplayName("ADMIN 新增培训计划默认为草稿，报名人数固定为0")
+    void createPlanCreatesDraft() throws Exception {
         Map<String, Object> body = saveBody();
         body.put("planName", "  " + planPrefix + "新增计划  ");
         body.put("category", "2");
@@ -148,7 +159,7 @@ class TrainingPlanTest {
         body.put("location", "社区培训室");
         body.put("organizer", "残疾人服务中心");
         body.put("remark", "周末培训");
-        JsonNode response = request("POST", API, body, businessToken);
+        JsonNode response = request("POST", API, body, adminToken);
         assertSuccess(response);
         TrainingPlanPO po = trainingPlanMapper.selectById(response.get("data").asLong());
         assertNotNull(po);
@@ -160,10 +171,86 @@ class TrainingPlanTest {
         assertEquals(20, po.getCapacity());
         assertEquals(0, po.getEnrolledCount());
         assertEquals(TrainingPlanService.STATUS_NOT_STARTED, po.getStatus());
+        assertEquals(TrainingPlanService.PUBLISH_DRAFT, po.getPublishStatus());
         assertEquals(0, po.getDeleted());
-        assertEquals(businessUserId, po.getCreateBy());
+        assertEquals(adminUserId, po.getCreateBy());
         assertNotNull(po.getCreateTime());
         assertNotNull(po.getUpdateTime());
+    }
+
+    @Test
+    @DisplayName("ADMIN 可发布草稿计划，重复发布和已取消计划均拒绝")
+    void adminCanPublishPlan() throws Exception {
+        assertEquals(403, request("PUT", API + "/" + draftAId + "/publish", null, businessToken)
+                .get("code").asInt());
+        assertEquals(TrainingPlanService.PUBLISH_DRAFT, trainingPlanMapper.selectById(draftAId).getPublishStatus());
+
+        assertSuccess(request("PUT", API + "/" + draftAId + "/publish", null, adminToken));
+        TrainingPlanPO published = trainingPlanMapper.selectById(draftAId);
+        assertEquals(TrainingPlanService.PUBLISH_PUBLISHED, published.getPublishStatus());
+        assertEquals(adminUserId, published.getUpdateBy());
+
+        // 重复发布拒绝；普通修改接口不能篡改发布状态。
+        assertEquals(409, request("PUT", API + "/" + draftAId + "/publish", null, adminToken)
+                .get("code").asInt());
+        Map<String, Object> body = saveBody();
+        body.put("publishStatus", TrainingPlanService.PUBLISH_DRAFT);
+        assertSuccess(request("PUT", API + "/" + draftAId, body, adminToken));
+        assertEquals(TrainingPlanService.PUBLISH_PUBLISHED, trainingPlanMapper.selectById(draftAId).getPublishStatus());
+
+        // 已取消的计划不能发布。
+        assertEquals(409, request("PUT", API + "/" + cancelledAId + "/publish", null, adminToken)
+                .get("code").asInt());
+    }
+
+    @Test
+    @DisplayName("BUSINESS 不能新增、修改、删除或发布培训计划")
+    void businessCannotWritePlans() throws Exception {
+        long before = trainingPlanMapper.selectCount(null);
+        assertEquals(403, request("POST", API, saveBody(), businessToken).get("code").asInt());
+        assertEquals(403, request("PUT", API + "/" + enrollingAId, saveBody(), businessToken).get("code").asInt());
+        assertEquals(403, request("DELETE", API + "/" + enrollingAId, null, businessToken).get("code").asInt());
+        assertEquals(403, request("PUT", API + "/" + draftAId + "/publish", null, businessBToken)
+                .get("code").asInt());
+        assertEquals(before, trainingPlanMapper.selectCount(null).longValue());
+        TrainingPlanPO unchanged = trainingPlanMapper.selectById(enrollingAId);
+        assertEquals("计划测试备注", unchanged.getRemark());
+        assertEquals(TrainingPlanService.PUBLISH_DRAFT, trainingPlanMapper.selectById(draftAId).getPublishStatus());
+    }
+
+    @Test
+    @DisplayName("不同网格的 BUSINESS 均可查看全平台已发布计划，草稿不可见")
+    void businessSeesAllPublishedPlansRegardlessOfGrid() throws Exception {
+        // 管理员可见全部 5 条，包含草稿。
+        assertEquals(5, pageData(query(""), adminToken).get("total").asLong());
+        // 两个不同网格的业务人员结果完全一致，且不依赖 create_by 或 grid_id。
+        for (String token : List.of(businessToken, businessBToken)) {
+            JsonNode page = pageData(query(""), token);
+            assertEquals(4, page.get("total").asLong());
+            List<Long> ids = idsOf(page);
+            assertTrue(ids.contains(enrollingAId));
+            assertTrue(ids.contains(endedAId));
+            assertTrue(ids.contains(cancelledAId));
+            assertTrue(ids.contains(publishedBId));
+            assertFalse(ids.contains(draftAId));
+        }
+        assertEquals(403, request("GET", API + "/" + draftAId, null, businessToken).get("code").asInt());
+        assertEquals(403, request("GET", API + "/" + Long.MAX_VALUE, null, businessToken).get("code").asInt());
+        assertSuccess(request("GET", API + "/" + draftAId, null, adminToken));
+    }
+
+    @Test
+    @DisplayName("BUSINESS 分页忽略草稿筛选条件，ADMIN 可按发布状态筛选")
+    void publishStatusFilterIsScopedByRole() throws Exception {
+        assertEquals(1, pageData(query("&publishStatus=0"), adminToken).get("total").asLong());
+        assertEquals(List.of(draftAId), idsOf(pageData(query("&publishStatus=0"), adminToken)));
+        assertEquals(4, pageData(query("&publishStatus=1"), adminToken).get("total").asLong());
+        // 业务人员传入草稿筛选也只返回已发布计划。
+        assertEquals(4, pageData(query("&publishStatus=0"), businessToken).get("total").asLong());
+        for (String invalid : List.of("2", "已发布")) {
+            assertEquals(400, request("GET", API + "/page?publishStatus=" + enc(invalid), null, adminToken)
+                    .get("code").asInt());
+        }
     }
 
     @Test
@@ -171,37 +258,38 @@ class TrainingPlanTest {
     void pagePlans() throws Exception {
         JsonNode first = pageData(query("&current=1&size=1"), businessToken);
         JsonNode second = pageData(query("&current=2&size=1"), businessToken);
-        assertEquals(3, first.get("total").asLong());
-        assertEquals(3, first.get("pages").asLong());
+        assertEquals(4, first.get("total").asLong());
+        assertEquals(4, first.get("pages").asLong());
         assertEquals(1, first.get("size").asLong());
         assertEquals(1, first.get("records").size());
         assertEquals(2, second.get("current").asLong());
-        assertEquals(endedAId.longValue(), first.get("records").get(0).get("id").asLong());
-        assertEquals(ongoingAId.longValue(), second.get("records").get(0).get("id").asLong());
+        assertNotEquals(first.get("records").get(0).get("id").asLong(),
+                second.get("records").get(0).get("id").asLong());
     }
 
     @Test
     @DisplayName("计划名称、大类、培训类型及状态筛选同时生效")
     void pageFiltersPlan() throws Exception {
-        JsonNode page = pageData(query("&category=2&trainingType=" + enc(JOB_TYPE) + "&status=0"), businessToken);
+        JsonNode page = pageData(query("&category=2&trainingType=" + enc(JOB_TYPE) + "&status=1"), businessToken);
         assertEquals(1, page.get("total").asLong());
-        assertEquals(List.of(pendingAId), idsOf(page));
-        JsonNode named = pageData("planName=" + enc(planPrefix + "职业"), adminToken);
-        assertEquals(List.of(pendingAId), idsOf(named));
-        assertEquals(List.of(ongoingAId), idsOf(pageData(query("&category=1&status=1"), businessToken)));
+        assertEquals(List.of(publishedBId), idsOf(page));
+        JsonNode named = pageData("planName=" + enc(planPrefix + "报名中"), adminToken);
+        assertEquals(List.of(enrollingAId), idsOf(named));
+        assertEquals(List.of(enrollingAId), idsOf(pageData(query("&category=1&status=1"), businessToken)));
     }
 
     @Test
     @DisplayName("详情返回计划字段，不暴露逻辑删除和审计账号字段")
     void detailPlan() throws Exception {
-        JsonNode response = request("GET", API + "/" + pendingAId, null, businessToken);
+        JsonNode response = request("GET", API + "/" + enrollingAId, null, businessToken);
         assertSuccess(response);
         JsonNode data = response.get("data");
-        assertEquals(pendingAId.longValue(), data.get("id").asLong());
+        assertEquals(enrollingAId.longValue(), data.get("id").asLong());
         assertEquals(START.toString(), data.get("startDate").asText());
         assertEquals(END.toString(), data.get("endDate").asText());
         assertEquals(20, data.get("capacity").asInt());
-        assertEquals(8, data.get("enrolledCount").asInt());
+        assertEquals(3, data.get("enrolledCount").asInt());
+        assertEquals(TrainingPlanService.PUBLISH_PUBLISHED, data.get("publishStatus").asText());
         assertFalse(data.has("deleted"));
         assertFalse(data.has("createBy"));
     }
@@ -214,109 +302,76 @@ class TrainingPlanTest {
         body.put("capacity", 25);
         body.put("status", TrainingPlanService.STATUS_IN_PROGRESS);
         body.put("location", "新的培训地点");
-        assertSuccess(request("PUT", API + "/" + pendingAId, body, businessToken));
-        TrainingPlanPO po = trainingPlanMapper.selectById(pendingAId);
+        assertSuccess(request("PUT", API + "/" + enrollingAId, body, adminToken));
+        TrainingPlanPO po = trainingPlanMapper.selectById(enrollingAId);
         assertEquals(planPrefix + "更新后的计划", po.getPlanName());
         assertEquals(25, po.getCapacity());
-        assertEquals(8, po.getEnrolledCount());
+        assertEquals(3, po.getEnrolledCount());
         assertEquals("新的培训地点", po.getLocation());
         assertEquals(TrainingPlanService.STATUS_IN_PROGRESS, po.getStatus());
-        assertEquals(JOB_TYPE, po.getTrainingType());
+        assertEquals(REHAB_TYPE, po.getTrainingType());
         assertEquals("计划测试主办单位", po.getOrganizer());
-        assertEquals(businessUserId, po.getCreateBy());
-        assertEquals(businessUserId, po.getUpdateBy());
+        assertEquals(adminUserId, po.getUpdateBy());
+    }
+
+    @Test
+    @DisplayName("报名人数只能由培训记录维护，计划接口不能写入或篡改")
+    void enrolledCountCannotBeModified() throws Exception {
+        Map<String, Object> body = saveBody();
+        body.put("enrolledCount", 50);
+        JsonNode create = request("POST", API, body, adminToken);
+        assertSuccess(create);
+        assertEquals(0, trainingPlanMapper.selectById(create.get("data").asLong()).getEnrolledCount());
+
+        Map<String, Object> update = saveBody();
+        update.put("enrolledCount", 0);
+        assertSuccess(request("PUT", API + "/" + enrollingAId, update, adminToken));
+        assertEquals(3, trainingPlanMapper.selectById(enrollingAId).getEnrolledCount());
     }
 
     @Test
     @DisplayName("删除为逻辑删除，分页和详情排除已删除计划")
     void deletePlanLogically() throws Exception {
-        assertSuccess(request("DELETE", API + "/" + pendingAId, null, businessToken));
-        assertNull(trainingPlanMapper.selectById(pendingAId));
+        assertSuccess(request("DELETE", API + "/" + enrollingAId, null, adminToken));
+        assertNull(trainingPlanMapper.selectById(enrollingAId));
         assertEquals(Integer.valueOf(1), jdbcTemplate.queryForObject(
-                "SELECT deleted FROM training_plan WHERE id = ?", Integer.class, pendingAId));
+                "SELECT deleted FROM training_plan WHERE id = ?", Integer.class, enrollingAId));
         JsonNode page = pageData(query(""), businessToken);
-        assertEquals(2, page.get("total").asLong());
-        assertFalse(idsOf(page).contains(pendingAId));
-        assertEquals(404, request("GET", API + "/" + pendingAId, null, adminToken).get("code").asInt());
-        assertEquals(403, request("PUT", API + "/" + pendingAId, saveBody(), businessToken).get("code").asInt());
-        assertEquals(403, request("DELETE", API + "/" + pendingAId, null, businessToken).get("code").asInt());
+        assertEquals(3, page.get("total").asLong());
+        assertFalse(idsOf(page).contains(enrollingAId));
+        assertEquals(404, request("GET", API + "/" + enrollingAId, null, adminToken).get("code").asInt());
+        assertEquals(404, request("DELETE", API + "/" + enrollingAId, null, adminToken).get("code").asInt());
     }
 
     @Test
-    @DisplayName("ADMIN 无需网格，可以跨网格管理及访问历史计划")
+    @DisplayName("ADMIN 可以管理全部计划，包含草稿和历史计划")
     void adminCanManageAllPlans() throws Exception {
-        assertEquals(6, pageData(query(""), adminToken).get("total").asLong());
-        assertSuccess(request("GET", API + "/" + pendingBId, null, adminToken));
-        assertSuccess(request("GET", API + "/" + unownedPlanId, null, adminToken));
+        assertEquals(5, pageData(query(""), adminToken).get("total").asLong());
+        assertSuccess(request("GET", API + "/" + publishedBId, null, adminToken));
+        assertSuccess(request("GET", API + "/" + draftAId, null, adminToken));
         JsonNode create = request("POST", API, saveBody(), adminToken);
         assertSuccess(create);
-        TrainingPlanPO created = trainingPlanMapper.selectById(create.get("data").asLong());
-        assertEquals(adminUserId, created.getCreateBy());
+        assertEquals(adminUserId, trainingPlanMapper.selectById(create.get("data").asLong()).getCreateBy());
         Map<String, Object> body = saveBody();
-        body.put("remark", "管理员跨网格修改");
-        assertSuccess(request("PUT", API + "/" + pendingBId, body, adminToken));
-        assertEquals(adminUserId, trainingPlanMapper.selectById(pendingBId).getUpdateBy());
-        assertSuccess(request("DELETE", API + "/" + pendingBId, null, adminToken));
-        assertNull(trainingPlanMapper.selectById(pendingBId));
+        body.put("remark", "管理员修改其他网格计划");
+        assertSuccess(request("PUT", API + "/" + publishedBId, body, adminToken));
+        assertEquals(adminUserId, trainingPlanMapper.selectById(publishedBId).getUpdateBy());
+        assertSuccess(request("DELETE", API + "/" + publishedBId, null, adminToken));
+        assertNull(trainingPlanMapper.selectById(publishedBId));
     }
 
     @Test
-    @DisplayName("BUSINESS 只能访问其有效网格创建的计划")
-    void businessPageIsScopedToGrid() throws Exception {
-        JsonNode page = pageData(query(""), businessToken);
-        assertEquals(3, page.get("total").asLong());
-        assertTrue(idsOf(page).contains(pendingAId));
-        assertFalse(idsOf(page).contains(pendingBId));
-        assertFalse(idsOf(page).contains(adminPlanId));
-        assertFalse(idsOf(page).contains(unownedPlanId));
-        for (JsonNode record : page.get("records")) {
-            assertEquals(businessUserId, trainingPlanMapper.selectById(record.get("id").asLong()).getCreateBy());
-        }
-        assertEquals(List.of(pendingBId), idsOf(pageData(query(""), businessBToken)));
-        assertEquals(403, request("GET", API + "/" + adminPlanId, null, businessToken).get("code").asInt());
-        assertEquals(403, request("GET", API + "/" + unownedPlanId, null, businessToken).get("code").asInt());
-    }
-
-    @Test
-    @DisplayName("伪造人员、网格或创建人不能跨网格查询、修改或删除计划")
-    void forgedScopeCannotBypassPermissions() throws Exception {
-        Map<String, Object> forged = saveBody();
-        forged.put("personId", Long.MAX_VALUE);
-        forged.put("gridId", gridBId);
-        forged.put("createBy", businessBUserId);
-        forged.put("remark", "越权修改");
-        assertEquals(403, request("GET", API + "/" + pendingBId + "?personId=" + Long.MAX_VALUE,
-                null, businessToken).get("code").asInt());
-        assertEquals(403, request("PUT", API + "/" + pendingBId, forged, businessToken).get("code").asInt());
-        assertEquals(403, request("DELETE", API + "/" + pendingBId, null, businessToken).get("code").asInt());
-        TrainingPlanPO original = trainingPlanMapper.selectById(pendingBId);
-        assertNotNull(original);
-        assertEquals(businessBUserId, original.getCreateBy());
-        assertEquals("计划测试备注", original.getRemark());
-        JsonNode page = pageData(query("&personId=" + Long.MAX_VALUE + "&gridId=" + gridBId
-                + "&createBy=" + businessBUserId), businessToken);
-        assertEquals(3, page.get("total").asLong());
-        assertFalse(idsOf(page).contains(pendingBId));
-
-        JsonNode create = request("POST", API, forged, businessToken);
-        assertSuccess(create);
-        Long newId = create.get("data").asLong();
-        assertEquals(businessUserId, trainingPlanMapper.selectById(newId).getCreateBy());
-        assertEquals(403, request("GET", API + "/" + newId, null, businessBToken).get("code").asInt());
-    }
-
-    @Test
-    @DisplayName("不存在的计划不能查询、修改或删除，BUSINESS 不泄露存在性")
+    @DisplayName("不存在的计划不能查询、修改、删除或发布，BUSINESS 不泄露存在性")
     void missingPlanIsRejected() throws Exception {
         String path = API + "/" + Long.MAX_VALUE;
         assertEquals(404, request("GET", path, null, adminToken).get("code").asInt());
         assertEquals(404, request("PUT", path, saveBody(), adminToken).get("code").asInt());
         assertEquals(404, request("DELETE", path, null, adminToken).get("code").asInt());
-        assertEquals(403, request("PUT", path, saveBody(), businessToken).get("code").asInt());
-        assertEquals(403, request("DELETE", path, null, businessToken).get("code").asInt());
+        assertEquals(404, request("PUT", path + "/publish", null, adminToken).get("code").asInt());
+        assertEquals(403, request("GET", path, null, businessToken).get("code").asInt());
         JsonNode missing = request("GET", path, null, businessToken);
-        JsonNode forbidden = request("GET", API + "/" + pendingBId, null, businessToken);
-        assertEquals(403, missing.get("code").asInt());
+        JsonNode forbidden = request("GET", API + "/" + draftAId, null, businessToken);
+        assertEquals(403, forbidden.get("code").asInt());
         assertEquals(missing.get("message").asText(), forbidden.get("message").asText());
     }
 
@@ -327,13 +382,13 @@ class TrainingPlanTest {
         Map<String, Object> body = saveBody();
         body.put("startDate", END.toString());
         body.put("endDate", START.toString());
-        assertEquals(400, request("POST", API, body, businessToken).get("code").asInt());
-        assertEquals(400, request("PUT", API + "/" + pendingAId, body, businessToken).get("code").asInt());
+        assertEquals(400, request("POST", API, body, adminToken).get("code").asInt());
+        assertEquals(400, request("PUT", API + "/" + draftAId, body, adminToken).get("code").asInt());
         assertEquals(before, trainingPlanMapper.selectCount(null).longValue());
-        assertEquals(START, trainingPlanMapper.selectById(pendingAId).getStartDate());
-        assertEquals(END, trainingPlanMapper.selectById(pendingAId).getEndDate());
+        assertEquals(START, trainingPlanMapper.selectById(draftAId).getStartDate());
+        assertEquals(END, trainingPlanMapper.selectById(draftAId).getEndDate());
         body.put("startDate", START.toString());
-        JsonNode create = request("POST", API, body, businessToken);
+        JsonNode create = request("POST", API, body, adminToken);
         assertSuccess(create);
         TrainingPlanPO po = trainingPlanMapper.selectById(create.get("data").asLong());
         assertEquals(po.getStartDate(), po.getEndDate());
@@ -347,65 +402,121 @@ class TrainingPlanTest {
             Map<String, Object> body = saveBody();
             body.put("capacity", capacity);
             assertEquals(400, request("POST", API, body, adminToken).get("code").asInt());
-            assertEquals(400, request("PUT", API + "/" + pendingAId, body, businessToken).get("code").asInt());
+            assertEquals(400, request("PUT", API + "/" + draftAId, body, adminToken).get("code").asInt());
         }
         assertEquals(before, trainingPlanMapper.selectCount(null).longValue());
-        assertEquals(20, trainingPlanMapper.selectById(pendingAId).getCapacity());
+        assertEquals(20, trainingPlanMapper.selectById(draftAId).getCapacity());
     }
 
     @Test
-    @DisplayName("报名人数不能为负或超过容量，等于容量允许")
-    void enrolledCountIsBounded() throws Exception {
-        long before = trainingPlanMapper.selectCount(null);
-        for (int enrolledCount : List.of(-1, 21)) {
-            Map<String, Object> body = saveBody();
-            body.put("enrolledCount", enrolledCount);
-            assertEquals(400, request("POST", API, body, businessToken).get("code").asInt());
-            assertEquals(400, request("PUT", API + "/" + pendingAId, body, businessToken).get("code").asInt());
-        }
-        assertEquals(before, trainingPlanMapper.selectCount(null).longValue());
-        assertEquals(8, trainingPlanMapper.selectById(pendingAId).getEnrolledCount());
-        Map<String, Object> full = saveBody();
-        full.put("enrolledCount", 20);
-        JsonNode create = request("POST", API, full, businessToken);
-        assertSuccess(create);
-        assertEquals(20, trainingPlanMapper.selectById(create.get("data").asLong()).getEnrolledCount());
-        assertSuccess(request("PUT", API + "/" + pendingAId, full, businessToken));
-        assertEquals(20, trainingPlanMapper.selectById(pendingAId).getEnrolledCount());
-    }
-
-    @Test
-    @DisplayName("新容量不能小于当前报名人数，伪造更低报名人数不能绕过")
+    @DisplayName("新容量不能小于当前已报名人数，且不能通过篡改报名人数绕过")
     void capacityCannotDropBelowCurrentEnrollments() throws Exception {
         Map<String, Object> body = saveBody();
-        body.put("capacity", 7);
-        assertEquals(400, request("PUT", API + "/" + pendingAId, body, businessToken).get("code").asInt());
+        body.put("capacity", 2);
+        assertEquals(400, request("PUT", API + "/" + enrollingAId, body, adminToken).get("code").asInt());
         body.put("enrolledCount", 0);
-        assertEquals(400, request("PUT", API + "/" + pendingAId, body, businessToken).get("code").asInt());
-        TrainingPlanPO unchanged = trainingPlanMapper.selectById(pendingAId);
+        assertEquals(400, request("PUT", API + "/" + enrollingAId, body, adminToken).get("code").asInt());
+        TrainingPlanPO unchanged = trainingPlanMapper.selectById(enrollingAId);
         assertEquals(20, unchanged.getCapacity());
-        assertEquals(8, unchanged.getEnrolledCount());
+        assertEquals(3, unchanged.getEnrolledCount());
         body.remove("enrolledCount");
-        body.put("capacity", 8);
-        assertSuccess(request("PUT", API + "/" + pendingAId, body, businessToken));
-        assertEquals(8, trainingPlanMapper.selectById(pendingAId).getCapacity());
-        assertEquals(8, trainingPlanMapper.selectById(pendingAId).getEnrolledCount());
+        body.put("capacity", 3);
+        assertSuccess(request("PUT", API + "/" + enrollingAId, body, adminToken));
+        assertEquals(3, trainingPlanMapper.selectById(enrollingAId).getCapacity());
+        assertEquals(3, trainingPlanMapper.selectById(enrollingAId).getEnrolledCount());
     }
 
     @Test
-    @DisplayName("状态只接受数据库已有的0、1、2")
+    @DisplayName("状态接受 training_status 字典已有的0、1、2、3、4")
     void statusUsesExistingDefinition() throws Exception {
         Map<String, Object> body = saveBody();
-        for (String status : List.of("0", "1", "2")) {
+        for (String status : List.of("0", "1", "2", "3", "4")) {
             body.put("status", status);
-            assertSuccess(request("PUT", API + "/" + pendingAId, body, adminToken));
-            assertEquals(status, trainingPlanMapper.selectById(pendingAId).getStatus());
+            assertSuccess(request("PUT", API + "/" + draftAId, body, adminToken));
+            assertEquals(status, trainingPlanMapper.selectById(draftAId).getStatus());
         }
-        body.put("status", "3");
-        assertEquals(400, request("POST", API, body, businessToken).get("code").asInt());
-        assertEquals(400, request("PUT", API + "/" + pendingAId, body, adminToken).get("code").asInt());
-        assertEquals(400, request("GET", API + "/page?status=3", null, adminToken).get("code").asInt());
-        assertEquals("2", trainingPlanMapper.selectById(pendingAId).getStatus());
+        body.put("status", "999");
+        assertEquals(400, request("POST", API, body, adminToken).get("code").asInt());
+        assertEquals(400, request("PUT", API + "/" + draftAId, body, adminToken).get("code").asInt());
+        assertEquals(400, request("GET", API + "/page?status=999", null, adminToken).get("code").asInt());
+        assertEquals("4", trainingPlanMapper.selectById(draftAId).getStatus());
+    }
+
+    @Test
+    @DisplayName("培训计划只保存字典值，拒绝中文标签和不存在的字典值")
+    void dictionaryValuesAreRequired() throws Exception {
+        long before = trainingPlanMapper.selectCount(null);
+        Map<String, String> dictFields = Map.of(
+                "category", "training_category",
+                "trainingType", "training_type",
+                "status", "training_status");
+        for (Map.Entry<String, String> field : dictFields.entrySet()) {
+            String value = field.getKey().equals("status") ? "2" : "1";
+            SysDictPO dict = dictOf(field.getValue(), value);
+            Map<String, Object> body = saveBody();
+            body.put(field.getKey(), dict.getDictLabel());
+            assertEquals(400, request("POST", API, body, adminToken).get("code").asInt());
+            assertEquals(400, request("PUT", API + "/" + draftAId, body, adminToken).get("code").asInt());
+            assertEquals(400, request("GET", API + "/page?" + field.getKey() + "=" + enc(dict.getDictLabel()),
+                    null, adminToken).get("code").asInt());
+            body.put(field.getKey(), "999");
+            assertEquals(400, request("POST", API, body, adminToken).get("code").asInt());
+        }
+        assertEquals(before, trainingPlanMapper.selectCount(null).longValue());
+        JsonNode detail = request("GET", API + "/" + enrollingAId, null, adminToken).get("data");
+        assertEquals("1", detail.get("category").asText());
+        assertEquals(REHAB_TYPE, detail.get("trainingType").asText());
+        assertEquals(TrainingPlanService.STATUS_ENROLLING, detail.get("status").asText());
+    }
+
+    @Test
+    @DisplayName("停用字典项后，新增、修改和筛选均拒绝该值")
+    void disabledDictionaryValuesAreRejected() throws Exception {
+        Map<String, String> dictFields = Map.of(
+                "category", "training_category",
+                "trainingType", "training_type",
+                "status", "training_status",
+                "publishStatus", "training_publish_status");
+        for (Map.Entry<String, String> field : dictFields.entrySet()) {
+            SysDictPO dict = dictOf(field.getValue(), "1");
+            Integer originalStatus = dict.getStatus();
+            try {
+                dict.setStatus(0);
+                sysDictMapper.updateById(dict);
+                Map<String, Object> body = saveBody();
+                body.put(field.getKey(), "1");
+                assertEquals(400, request("GET", API + "/page?" + field.getKey() + "=1",
+                        null, adminToken).get("code").asInt());
+                if (!"publishStatus".equals(field.getKey())) {
+                    assertEquals(400, request("POST", API, body, adminToken).get("code").asInt());
+                }
+            } finally {
+                dict.setStatus(originalStatus);
+                sysDictMapper.updateById(dict);
+            }
+        }
+        // 默认状态与默认发布状态同样必须是启用字典项。
+        SysDictPO defaultStatus = dictOf("training_status", TrainingPlanService.STATUS_NOT_STARTED);
+        Integer originalStatus = defaultStatus.getStatus();
+        try {
+            defaultStatus.setStatus(0);
+            sysDictMapper.updateById(defaultStatus);
+            assertEquals(400, request("POST", API, saveBody(), adminToken).get("code").asInt());
+        } finally {
+            defaultStatus.setStatus(originalStatus);
+            sysDictMapper.updateById(defaultStatus);
+        }
+        SysDictPO defaultPublish = dictOf("training_publish_status", TrainingPlanService.PUBLISH_PUBLISHED);
+        Integer originalPublishStatus = defaultPublish.getStatus();
+        try {
+            defaultPublish.setStatus(0);
+            sysDictMapper.updateById(defaultPublish);
+            assertEquals(400, request("PUT", API + "/" + draftAId + "/publish", null, adminToken)
+                    .get("code").asInt());
+        } finally {
+            defaultPublish.setStatus(originalPublishStatus);
+            sysDictMapper.updateById(defaultPublish);
+        }
     }
 
     @Test
@@ -420,50 +531,27 @@ class TrainingPlanTest {
         for (String name : List.of("", "   ", "长".repeat(101))) {
             Map<String, Object> body = saveBody();
             body.put("planName", name);
-            assertEquals(400, request("POST", API, body, businessToken).get("code").asInt());
+            assertEquals(400, request("POST", API, body, adminToken).get("code").asInt());
         }
         Map<String, Object> invalidCategory = saveBody();
         invalidCategory.put("category", "3");
-        assertEquals(400, request("POST", API, invalidCategory, businessToken).get("code").asInt());
+        assertEquals(400, request("POST", API, invalidCategory, adminToken).get("code").asInt());
         assertEquals(400, request("GET", API + "/page?current=0", null, adminToken).get("code").asInt());
         assertEquals(400, request("GET", API + "/page?size=101", null, adminToken).get("code").asInt());
         assertEquals(before, trainingPlanMapper.selectCount(null).longValue());
     }
 
     @Test
-    @DisplayName("无网格返回空分页，详情及写操作拒绝，多网格配置返回403")
-    void missingOrMultipleGridsAreRestricted() throws Exception {
-        assertEquals(0, pageData(query(""), noGridToken).get("total").asLong());
-        JsonNode multiPage = request("GET", API + "/page", null, multiGridToken);
-        assertEquals(403, multiPage.get("code").asInt());
-        assertEquals(GridScopeService.MULTI_GRID_MESSAGE, multiPage.get("message").asText());
+    @DisplayName("无网格或多网格账号仍可查看已发布计划，但不能维护计划")
+    void gridStateDoesNotBlockPublishedPlanViewing() throws Exception {
         for (String token : List.of(noGridToken, multiGridToken)) {
+            assertEquals(4, pageData(query(""), token).get("total").asLong());
             assertEquals(403, request("POST", API, saveBody(), token).get("code").asInt());
-            assertEquals(403, request("GET", API + "/" + pendingAId, null, token).get("code").asInt());
-            assertEquals(403, request("PUT", API + "/" + pendingAId, saveBody(), token).get("code").asInt());
-            assertEquals(403, request("DELETE", API + "/" + pendingAId, null, token).get("code").asInt());
+            assertEquals(403, request("PUT", API + "/" + draftAId, saveBody(), token).get("code").asInt());
+            assertEquals(403, request("DELETE", API + "/" + draftAId, null, token).get("code").asInt());
+            assertEquals(403, request("PUT", API + "/" + draftAId + "/publish", null, token).get("code").asInt());
         }
-        assertNotNull(trainingPlanMapper.selectById(pendingAId));
-    }
-
-    @Test
-    @DisplayName("网格停用后，BUSINESS 无法查询或写入其创建的计划")
-    void inactiveGridIsDenied() throws Exception {
-        SysGridPO grid = new SysGridPO();
-        grid.setId(gridAId);
-        grid.setStatus(0);
-        try {
-            assertEquals(1, sysGridMapper.updateById(grid));
-            assertEquals(0, pageData(query(""), businessToken).get("total").asLong());
-            assertEquals(403, request("GET", API + "/" + pendingAId, null, businessToken).get("code").asInt());
-            assertEquals(403, request("POST", API, saveBody(), businessToken).get("code").asInt());
-            assertEquals(403, request("PUT", API + "/" + pendingAId, saveBody(), businessToken).get("code").asInt());
-            assertEquals(403, request("DELETE", API + "/" + pendingAId, null, businessToken).get("code").asInt());
-            assertSuccess(request("GET", API + "/" + pendingAId, null, adminToken));
-        } finally {
-            grid.setStatus(1);
-            sysGridMapper.updateById(grid);
-        }
+        assertNotNull(trainingPlanMapper.selectById(draftAId));
     }
 
     @Test
@@ -471,10 +559,19 @@ class TrainingPlanTest {
     void authenticationAndRolesAreRequired() throws Exception {
         assertEquals(401, request("GET", API + "/page", null, null).get("code").asInt());
         assertEquals(403, request("GET", API + "/page", null, workerToken).get("code").asInt());
-        assertEquals(403, request("GET", API + "/" + pendingAId, null, workerToken).get("code").asInt());
+        assertEquals(403, request("GET", API + "/" + draftAId, null, workerToken).get("code").asInt());
         assertEquals(403, request("POST", API, saveBody(), workerToken).get("code").asInt());
-        assertEquals(403, request("PUT", API + "/" + pendingAId, saveBody(), workerToken).get("code").asInt());
-        assertEquals(403, request("DELETE", API + "/" + pendingAId, null, workerToken).get("code").asInt());
+        assertEquals(403, request("PUT", API + "/" + draftAId, saveBody(), workerToken).get("code").asInt());
+        assertEquals(403, request("DELETE", API + "/" + draftAId, null, workerToken).get("code").asInt());
+        assertEquals(403, request("PUT", API + "/" + draftAId + "/publish", null, workerToken).get("code").asInt());
+    }
+
+    private SysDictPO dictOf(String dictType, String dictValue) {
+        LambdaQueryWrapper<SysDictPO> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(SysDictPO::getDictType, dictType).eq(SysDictPO::getDictValue, dictValue);
+        SysDictPO dict = sysDictMapper.selectOne(wrapper);
+        assertNotNull(dict);
+        return dict;
     }
 
     private Long createUser(String username, String roleCode) {
@@ -506,7 +603,7 @@ class TrainingPlanTest {
         return grid.getId();
     }
 
-    private Long seedPlan(String name, Long createBy, String category, String trainingType,
+    private Long seedPlan(String name, String publishStatus, String category, String trainingType,
                           String status, int enrolledCount) {
         TrainingPlanPO plan = new TrainingPlanPO();
         plan.setPlanName(planPrefix + name);
@@ -514,13 +611,18 @@ class TrainingPlanTest {
         plan.setTrainingType(trainingType);
         plan.setStartDate(START);
         plan.setEndDate(END);
+        if (TrainingPlanService.STATUS_ENDED.equals(status)) {
+            plan.setStartDate(LocalDate.now().minusDays(10));
+            plan.setEndDate(LocalDate.now().minusDays(1));
+        }
         plan.setCapacity(20);
         plan.setEnrolledCount(enrolledCount);
         plan.setOrganizer("计划测试主办单位");
         plan.setStatus(status);
+        plan.setPublishStatus(publishStatus);
         plan.setRemark("计划测试备注");
         plan.setDeleted(0);
-        plan.setCreateBy(createBy);
+        plan.setCreateBy(adminUserId);
         trainingPlanMapper.insert(plan);
         return plan.getId();
     }

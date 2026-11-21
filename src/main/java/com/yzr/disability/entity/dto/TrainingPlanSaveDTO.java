@@ -2,9 +2,7 @@ package com.yzr.disability.entity.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
-import jakarta.validation.constraints.PositiveOrZero;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -18,10 +16,12 @@ public class TrainingPlanSaveDTO {
     @Size(max = 100, message = "计划名称长度不能超过 100")
     private String planName;
 
-    @Pattern(regexp = "1|2", message = "培训大类只能为 1（康复类）、2（就业类）")
+    /** training_category 字典值，不传中文标签。 */
+    @Size(max = 20, message = "培训大类字典值长度不能超过 20")
     private String category;
 
-    @Size(max = 20, message = "培训类型长度不能超过 20")
+    /** training_type 字典值，不传中文标签。 */
+    @Size(max = 20, message = "培训类型字典值长度不能超过 20")
     private String trainingType;
 
     @NotNull(message = "开始日期不能为空")
@@ -37,15 +37,11 @@ public class TrainingPlanSaveDTO {
     @Positive(message = "计划人数必须大于 0")
     private Integer capacity;
 
-    /** 新增不传时默认 0；修改不传时保留当前报名人数。 */
-    @PositiveOrZero(message = "已报名人数不能小于 0")
-    private Integer enrolledCount;
-
     @Size(max = 100, message = "主办单位长度不能超过 100")
     private String organizer;
 
-    /** 新增不传时默认未开始；修改不传时保持原状态。 */
-    @Pattern(regexp = "0|1|2", message = "计划状态只能为 0（未开始）、1（进行中）、2（已结束）")
+    /** training_status 字典值；新增不传时默认 0，修改不传时保持原值。 */
+    @Size(max = 20, message = "计划状态字典值长度不能超过 20")
     private String status;
 
     @Size(max = 255, message = "备注长度不能超过 255")

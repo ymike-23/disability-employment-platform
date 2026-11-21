@@ -5,7 +5,7 @@ import lombok.Data;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 
-/** 培训计划响应对象，不包含逻辑删除等内部字段。 */
+/** 培训计划响应对象；枚举字段返回 dict_value，中文展示后续统一由字典模块处理。 */
 @Data
 public class TrainingPlanVO {
 
@@ -20,6 +20,7 @@ public class TrainingPlanVO {
     private Integer enrolledCount;
     private String organizer;
     private String status;
+    private String publishStatus;
     private String remark;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;

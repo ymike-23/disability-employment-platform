@@ -1,6 +1,7 @@
 package com.yzr.disability.config;
 
 import com.yzr.disability.common.result.Result;
+import com.yzr.disability.common.security.LoginUser;
 import com.yzr.disability.service.TokenService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -90,6 +91,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         } catch (Exception e) {
             writeUnauthorized(response, "用户认证失败");
+            return;
+        }
+
+        // 用户名可被修改或重新使用，JWT中的ID必须与当前加载的账号一致。
+        if (!(userDetails instanceof LoginUser loginUser) || !userId.equals(loginUser.getUserId())) {
+            writeUnauthorized(response, "账户信息已变更，请重新登录");
             return;
         }
 

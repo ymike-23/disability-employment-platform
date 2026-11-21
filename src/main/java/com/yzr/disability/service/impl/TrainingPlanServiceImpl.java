@@ -5,10 +5,13 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yzr.disability.common.exception.BusinessException;
 import com.yzr.disability.common.result.PageResult;
 import com.yzr.disability.common.security.SecurityUtils;
+import com.yzr.disability.common.util.TrainingPlanState;
 import com.yzr.disability.entity.dto.TrainingPlanQueryDTO;
 import com.yzr.disability.entity.dto.TrainingPlanSaveDTO;
+import com.yzr.disability.entity.po.SysDictPO;
 import com.yzr.disability.entity.po.TrainingPlanPO;
 import com.yzr.disability.entity.vo.TrainingPlanVO;
+import com.yzr.disability.mapper.SysDictMapper;
 import com.yzr.disability.mapper.TrainingPlanMapper;
 import com.yzr.disability.service.GridScopeService;
 import com.yzr.disability.service.TrainingPlanService;
@@ -19,40 +22,55 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.util.List;
 
-/** 培训计划管理；通过创建人的当前有效网格限定 BUSINESS 数据范围。 */
+/**
+ * 培训计划管理。
+ *
+ * <p>计划由管理员统一维护：管理员可新增、修改、删除并发布计划，可查看全部计划
+ * （含草稿）；业务人员只能查看全平台已发布的计划，不再按 create_by 或 grid_id 过滤。
+ * 报名人数只能由培训记录维护，不能通过计划接口直接写入。
+ */
 @Service
 public class TrainingPlanServiceImpl implements TrainingPlanService {
 
     private static final long DEFAULT_PAGE_SIZE = 10L;
     private static final long MAX_PAGE_SIZE = 100L;
     private static final String PLAN_ACCESS_MESSAGE = "培训计划不存在或无权访问";
+    private static final String CATEGORY_DICT_TYPE = "training_category";
+    private static final String TRAINING_DICT_TYPE = "training_type";
+    private static final String STATUS_DICT_TYPE = "training_status";
+    private static final String PUBLISH_DICT_TYPE = "training_publish_status";
 
     @Autowired
     private TrainingPlanMapper trainingPlanMapper;
+
+    @Autowired
+    private SysDictMapper sysDictMapper;
 
     @Autowired
     private GridScopeService gridScopeService;
 
     @Override
     public PageResult<TrainingPlanVO> page(TrainingPlanQueryDTO query) {
+        LocalDate today = LocalDate.now();
         boolean admin = gridScopeService.isAdmin();
-        Long gridId = null;
-        if (!admin) {
-            List<Long> gridIds = gridScopeService.getCurrentGridIds();
-            if (gridIds.size() > 1) {
-                throw new BusinessException(403, GridScopeService.MULTI_GRID_MESSAGE);
-            }
-            if (gridIds.isEmpty()) {
-                return PageResult.empty();
-            }
-            gridId = gridIds.get(0);
-        }
-        validateStatus(query.getStatus());
-        validateCategory(query.getCategory());
+        validateDictValue(STATUS_DICT_TYPE, query.getStatus(), "计划状态");
+        validateDictValue(CATEGORY_DICT_TYPE, query.getCategory(), "培训大类");
+        validateDictValue(TRAINING_DICT_TYPE, query.getTrainingType(), "培训类型");
+        validateDictValue(PUBLISH_DICT_TYPE, query.getPublishStatus(), "发布状态");
+
         LambdaQueryWrapper<TrainingPlanPO> wrapper = new LambdaQueryWrapper<>();
-        applyGridScope(wrapper, gridId);
+        if (admin) {
+            // 管理员查看全部计划，包含草稿；不按创建人或网格过滤。
+            if (StringUtils.hasText(query.getPublishStatus())) {
+                wrapper.eq(TrainingPlanPO::getPublishStatus, query.getPublishStatus().trim());
+            }
+        } else {
+            // 业务人员只能查看全平台已发布计划，草稿筛选条件一律忽略。
+            wrapper.eq(TrainingPlanPO::getPublishStatus, PUBLISH_PUBLISHED);
+        }
         if (StringUtils.hasText(query.getPlanName())) {
             wrapper.like(TrainingPlanPO::getPlanName, query.getPlanName().trim());
         }
@@ -63,7 +81,7 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
             wrapper.eq(TrainingPlanPO::getTrainingType, query.getTrainingType().trim());
         }
         if (query.getStatus() != null) {
-            wrapper.eq(TrainingPlanPO::getStatus, query.getStatus());
+            wrapper.apply("(" + TrainingPlanState.STATUS_SQL + ") = {1}", today, query.getStatus());
         }
         wrapper.orderByDesc(TrainingPlanPO::getCreateTime).orderByDesc(TrainingPlanPO::getId);
 
@@ -71,30 +89,41 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
         long size = query.getSize() == null || query.getSize() < 1
                 ? DEFAULT_PAGE_SIZE : Math.min(query.getSize(), MAX_PAGE_SIZE);
         Page<TrainingPlanPO> result = trainingPlanMapper.selectPage(new Page<>(current, size), wrapper);
-        List<TrainingPlanVO> records = result.getRecords().stream().map(this::toVO).toList();
+        List<TrainingPlanVO> records = result.getRecords().stream().map(plan -> toVO(plan, today)).toList();
         return new PageResult<>(records, result.getTotal(), result.getCurrent(), result.getSize(), result.getPages());
     }
 
     @Override
     public TrainingPlanVO detail(Long id) {
-        return toVO(requirePlan(id, false));
+        boolean admin = gridScopeService.isAdmin();
+        if (id == null || id <= 0) {
+            throw new BusinessException(400, "培训计划 ID 必须大于 0");
+        }
+        TrainingPlanPO plan = trainingPlanMapper.selectById(id);
+        // 业务人员不能查看未发布计划，返回 403 且不泄露存在性。
+        if (plan == null || (!admin && !PUBLISH_PUBLISHED.equals(plan.getPublishStatus()))) {
+            throw new BusinessException(admin ? 404 : 403, PLAN_ACCESS_MESSAGE);
+        }
+        return toVO(plan, LocalDate.now());
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Long create(TrainingPlanSaveDTO dto) {
-        if (!gridScopeService.isAdmin()) {
-            gridScopeService.requireSingleGridId();
-        }
-        int enrolledCount = dto.getEnrolledCount() == null ? 0 : dto.getEnrolledCount();
-        validatePlan(dto, enrolledCount);
+        validatePlan(dto);
+        String status = dto.getStatus() == null ? STATUS_NOT_STARTED : dto.getStatus();
+        // 默认状态同样必须对应启用的字典项。
+        validateDictValue(STATUS_DICT_TYPE, status, "计划状态");
         TrainingPlanPO po = new TrainingPlanPO();
         BeanUtils.copyProperties(dto, po);
         normalizeFields(po);
-        po.setEnrolledCount(enrolledCount);
-        po.setStatus(dto.getStatus() == null ? STATUS_NOT_STARTED : dto.getStatus());
+        // 报名人数只能由培训记录维护，新增计划固定为 0。
+        po.setEnrolledCount(0);
+        po.setStatus(status);
+        // 普通保存不能绕过发布流程，新增计划统一为草稿。
+        po.setPublishStatus(PUBLISH_DRAFT);
         po.setDeleted(0);
-        // 仅使用当前登录账号作为创建人，不接受前端伪造的人员、网格或创建人。
+        // 仅使用当前登录账号作为创建人，不接受前端伪造的创建人。
         po.setCreateBy(SecurityUtils.getUserId());
         LocalDateTime now = LocalDateTime.now();
         po.setCreateTime(now);
@@ -109,13 +138,13 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
     @Transactional(rollbackFor = Exception.class)
     public void update(Long id, TrainingPlanSaveDTO dto) {
         TrainingPlanPO existing = requirePlan(id, true);
+        validatePlan(dto);
+        validateDictValue(STATUS_DICT_TYPE, dto.getStatus(), "计划状态");
         int currentEnrolledCount = existing.getEnrolledCount() == null ? 0 : existing.getEnrolledCount();
-        int enrolledCount = dto.getEnrolledCount() == null ? currentEnrolledCount : dto.getEnrolledCount();
-        validatePlan(dto, enrolledCount);
         if (currentEnrolledCount < 0) {
             throw new BusinessException(400, "当前已报名人数不能小于 0");
         }
-        // 即使请求同时降低报名人数，也不能绕过对数据库当前报名人数的容量约束。
+        // 即使请求同时降低容量，也不能绕过对数据库当前报名人数的容量约束。
         if (dto.getCapacity() < currentEnrolledCount) {
             throw new BusinessException(400, "计划人数不能小于当前已报名人数");
         }
@@ -123,6 +152,9 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
         BeanUtils.copyProperties(dto, changes);
         changes.setId(id);
         normalizeFields(changes);
+        // 报名人数与发布状态只能由培训记录、发布接口维护，普通修改一律忽略。
+        changes.setEnrolledCount(null);
+        changes.setPublishStatus(null);
         changes.setUpdateBy(SecurityUtils.getUserId());
         changes.setUpdateTime(LocalDateTime.now());
         if (trainingPlanMapper.updateById(changes) != 1) {
@@ -140,38 +172,50 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
         }
     }
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void publish(Long id) {
+        TrainingPlanPO existing = requirePlan(id, true);
+        if (PUBLISH_PUBLISHED.equals(existing.getPublishStatus())) {
+            throw new BusinessException(409, "培训计划已发布");
+        }
+        if (STATUS_CANCELLED.equals(existing.getStatus())) {
+            throw new BusinessException(409, "已取消的培训计划不能发布");
+        }
+        if (existing.getCapacity() == null || existing.getCapacity() <= 0) {
+            throw new BusinessException(409, "培训计划容量配置异常，不能发布");
+        }
+        // 目标发布状态同样必须是启用的字典项。
+        validateDictValue(PUBLISH_DICT_TYPE, PUBLISH_PUBLISHED, "发布状态");
+        TrainingPlanPO changes = new TrainingPlanPO();
+        changes.setId(id);
+        changes.setPublishStatus(PUBLISH_PUBLISHED);
+        changes.setUpdateBy(SecurityUtils.getUserId());
+        changes.setUpdateTime(LocalDateTime.now());
+        if (trainingPlanMapper.updateById(changes) != 1) {
+            throw new BusinessException(409, "培训计划已变更，请刷新后重试");
+        }
+    }
+
+    /**
+     * 锁定并校验计划可维护性；计划权限不再与网格或创建人绑定，改由方法级角色控制。
+     */
     private TrainingPlanPO requirePlan(Long id, boolean forUpdate) {
-        boolean admin = gridScopeService.isAdmin();
         if (id == null || id <= 0) {
             throw new BusinessException(400, "培训计划 ID 必须大于 0");
         }
-        Long gridId = admin ? null : gridScopeService.requireSingleGridId();
-        TrainingPlanPO plan;
-        if (forUpdate) {
-            plan = trainingPlanMapper.selectAccessibleForUpdate(id, gridId);
-        } else {
-            LambdaQueryWrapper<TrainingPlanPO> wrapper = new LambdaQueryWrapper<>();
-            wrapper.eq(TrainingPlanPO::getId, id);
-            applyGridScope(wrapper, gridId);
-            plan = trainingPlanMapper.selectOne(wrapper);
-        }
+        // 触发角色准入校验，防止无 ADMIN/BUSINESS 角色的账号进入。
+        gridScopeService.isAdmin();
+        TrainingPlanPO plan = forUpdate
+                ? trainingPlanMapper.selectAccessibleForUpdate(id)
+                : trainingPlanMapper.selectById(id);
         if (plan == null) {
-            throw new BusinessException(admin ? 404 : 403, PLAN_ACCESS_MESSAGE);
+            throw new BusinessException(404, PLAN_ACCESS_MESSAGE);
         }
         return plan;
     }
 
-    private void applyGridScope(LambdaQueryWrapper<TrainingPlanPO> wrapper, Long gridId) {
-        if (gridId != null) {
-            // 培训计划没有 grid_id/person_id；按真实 create_by 关联既有网格配置。
-            // 数据范围在分页、计数、详情查询前生效，不采用请求中的 personId。
-            wrapper.exists("SELECT 1 FROM sys_grid g"
-                    + " WHERE g.id = {0} AND g.grid_worker_id = training_plan.create_by"
-                    + " AND g.status = 1 AND g.deleted = 0", gridId);
-        }
-    }
-
-    private void validatePlan(TrainingPlanSaveDTO dto, int enrolledCount) {
+    private void validatePlan(TrainingPlanSaveDTO dto) {
         if (!StringUtils.hasText(dto.getPlanName())) {
             throw new BusinessException(400, "计划名称不能为空");
         }
@@ -184,25 +228,22 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
         if (dto.getCapacity() == null || dto.getCapacity() <= 0) {
             throw new BusinessException(400, "计划人数必须大于 0");
         }
-        if (enrolledCount < 0) {
-            throw new BusinessException(400, "已报名人数不能小于 0");
-        }
-        if (enrolledCount > dto.getCapacity()) {
-            throw new BusinessException(400, "已报名人数不能超过计划人数");
-        }
-        validateStatus(dto.getStatus());
-        validateCategory(dto.getCategory());
+        validateDictValue(CATEGORY_DICT_TYPE, dto.getCategory(), "培训大类");
+        validateDictValue(TRAINING_DICT_TYPE, dto.getTrainingType(), "培训类型");
     }
 
-    private void validateStatus(String status) {
-        if (status != null && !VALID_STATUSES.contains(status)) {
-            throw new BusinessException(400, "计划状态只能为 0（未开始）、1（进行中）、2（已结束）");
+    private void validateDictValue(String dictType, String value, String fieldName) {
+        if (value == null) {
+            return;
         }
-    }
-
-    private void validateCategory(String category) {
-        if (category != null && !"1".equals(category) && !"2".equals(category)) {
-            throw new BusinessException(400, "培训大类只能为 1（康复类）、2（就业类）");
+        LambdaQueryWrapper<SysDictPO> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(SysDictPO::getDictType, dictType)
+                .eq(SysDictPO::getDictValue, value)
+                .eq(SysDictPO::getStatus, 1)
+                .select(SysDictPO::getDictValue);
+        SysDictPO dict = sysDictMapper.selectOne(wrapper);
+        if (dict == null || !value.equals(dict.getDictValue())) {
+            throw new BusinessException(400, fieldName + "字典值不存在或已停用");
         }
     }
 
@@ -218,9 +259,10 @@ public class TrainingPlanServiceImpl implements TrainingPlanService {
         return StringUtils.hasText(value) ? value.trim() : null;
     }
 
-    private TrainingPlanVO toVO(TrainingPlanPO po) {
+    private TrainingPlanVO toVO(TrainingPlanPO po, LocalDate today) {
         TrainingPlanVO vo = new TrainingPlanVO();
         BeanUtils.copyProperties(po, vo);
+        vo.setStatus(TrainingPlanState.effectiveStatus(po, today));
         return vo;
     }
 }
